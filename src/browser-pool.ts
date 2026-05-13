@@ -115,7 +115,7 @@ export class BrowserPool {
     // Si hay proxies configurados, asignar uno round-robin
     const proxy = this.pickProxy();
     return this.browser.newContext({
-      userAgent: 'Mozilla/5.0 (compatible; CashiOsiptelBot/0.1; +contact: ops@contactototal.com.pe)',
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
       viewport: { width: 1366, height: 768 },
       locale: 'es-PE',
       timezoneId: 'America/Lima',

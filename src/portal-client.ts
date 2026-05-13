@@ -15,6 +15,7 @@
  *  9. El número viene parcialmente enmascarado: "97851****" (5 visibles + 4 con '*').
  */
 import type { Page } from 'playwright';
+import { writeFile } from 'node:fs/promises';
 import { config } from './config.js';
 import { logger, maskPhone } from './logger.js';
 import { captchaSolver, CaptchaError } from './captcha-solver.js';
@@ -69,10 +70,26 @@ export async function checkDocumentOnPortal(
   page.setDefaultTimeout(navTimeout);
 
   try {
-    await page.goto(config.portalUrl, { waitUntil: 'domcontentloaded' });
+    await page.goto(config.portalUrl, { waitUntil: 'load' });
 
     if (await isBanned(page)) {
+      await dumpDiagnostics(page, 'banned-on-load');
       return { status: 'BANNED', lines: null, captchaAttempts, error: 'banned-on-load' };
+    }
+
+    // Esperar explícitamente a que el form esté en el DOM. Si no aparece
+    // significa que el portal sirvió HTML distinto (anti-bot interstitial,
+    // geo-block, etc.). Dumpeamos diagnóstico para inspeccionar.
+    try {
+      await page.waitForSelector(SEL.docTypeSelect, { state: 'attached', timeout: navTimeout });
+    } catch {
+      await dumpDiagnostics(page, 'form-not-found');
+      return {
+        status: 'ERROR',
+        lines: null,
+        captchaAttempts,
+        error: 'form-not-found:diagnostics-at-/tmp/osiptel-fail.{html,png}'
+      };
     }
 
     // 1. Tipo de documento + número
@@ -229,6 +246,22 @@ async function isBanned(page: Page): Promise<boolean> {
   }
   const url = page.url();
   return /captcha-blocked|acceso-bloqueado|forbidden|429/i.test(url);
+}
+
+/**
+ * Volcado diagnóstico: cuando algo falla y no estamos seguros qué cargó
+ * el portal, dejamos HTML + screenshot en /tmp para inspeccionar.
+ * Se sobreescriben en cada falla; solo el último intento queda.
+ */
+async function dumpDiagnostics(page: Page, reason: string): Promise<void> {
+  try {
+    const html = await page.content();
+    await writeFile('/tmp/osiptel-fail.html', html, 'utf-8');
+    await page.screenshot({ path: '/tmp/osiptel-fail.png', fullPage: true });
+    logger.warn({ reason, url: page.url(), htmlLen: html.length }, 'diagnostics dumped to /tmp/osiptel-fail.{html,png}');
+  } catch (err) {
+    logger.warn({ reason, err: errMsg(err) }, 'could not write diagnostics');
+  }
 }
 
 function normalizeOperator(raw: string): OperatorCode {
