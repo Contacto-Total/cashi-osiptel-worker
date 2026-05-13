@@ -18,7 +18,7 @@ import type { Page } from 'playwright';
 import { config } from './config.js';
 import { logger, maskPhone } from './logger.js';
 import { captchaSolver, CaptchaError } from './captcha-solver.js';
-import type { CheckResponse, DocumentType, OperatorCode, OsiptelLine } from './schema.js';
+import type { DocumentType, OperatorCode, OsiptelLine } from './schema.js';
 
 // ============================
 // Selectores confirmados contra el portal real
