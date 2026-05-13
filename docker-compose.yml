@@ -1,0 +1,48 @@
+# ============================================================
+# Docker Compose para desarrollo local del worker Osiptel.
+#
+# Levanta solo el container del worker. El backend Java y MySQL
+# corren separados (web-service-cashi tiene su propio ciclo de vida).
+#
+# Uso:
+#   cd cashi-osiptel-worker
+#   cp .env.example .env
+#   # editar .env con TWO_CAPTCHA_KEY, WORKER_TOKEN
+#   docker compose up --build
+#
+# El backend Java debe apuntar a http://localhost:8090 (o el host correspondiente):
+#   cashi.osiptel.worker-url=http://host.docker.internal:8090
+# ============================================================
+services:
+  osiptel-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cashi-osiptel-worker:0.1
+    container_name: cashi-osiptel-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${PORT:-8090}:8090"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8090/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    # Si necesitas que el worker hable con el backend Java en el host:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Memoria: Chromium consume ~500MB por contexto + base
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+
+# Para producción se recomienda agregar la red explícita del backend:
+# networks:
+#   cashi-net:
+#     external: true
