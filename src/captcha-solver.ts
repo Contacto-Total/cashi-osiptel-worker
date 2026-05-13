@@ -1,16 +1,10 @@
 /**
- * Cliente 2Captcha.
+ * Cliente 2Captcha. El portal Osiptel usa reCAPTCHA v3 (invisible).
  *
- * Maneja los dos tipos más comunes que se encuentran en portales gubernamentales PE:
- *  - reCAPTCHA v2 (siteKey + pageUrl)
- *  - hCaptcha (siteKey + pageUrl)
+ * v3 requiere: pageurl + googlekey + action + min_score.
+ * El token resultante se inyecta en el campo oculto del form.
  *
- * NOTA: el tipo real de captcha del portal Osiptel se confirma con inspección manual.
- * Este módulo expone ambos solvers; el portal-client elige.
- *
- * Manejo de errores:
- *  - Si la API key no está configurada, retorna CaptchaError con detail='no-api-key'.
- *  - Timeouts y errores se propagan como excepciones - el caller decide reintento.
+ * También se mantiene el método v2 por si alguna otra integración lo necesita.
  */
 import { Solver } from '2captcha-ts';
 import { config } from './config.js';
@@ -38,14 +32,39 @@ class CaptchaSolver {
   }
 
   /**
-   * Resuelve un reCAPTCHA v2. Devuelve el token g-recaptcha-response listo para inyectar.
+   * Resuelve reCAPTCHA v3 (invisible). Es el modo que usa Osiptel.
+   *
+   * @param sitekey sitekey publico del site
+   * @param pageurl URL exacta donde corre el captcha
+   * @param action action declarada en el grecaptcha.execute(sitekey, { action })
+   * @param minScore score mínimo aceptado (0.3 por default es lo más usado)
    */
-  async solveRecaptchaV2(siteKey: string, pageUrl: string): Promise<string> {
+  async solveRecaptchaV3(sitekey: string, pageurl: string, action: string, minScore = 0.3): Promise<string> {
     const t0 = Date.now();
     try {
       const res = await this.getSolver().recaptcha({
-        googlekey: siteKey,
-        pageurl: pageUrl,
+        pageurl,
+        googlekey: sitekey,
+        version: 'v3',
+        action,
+        min_score: minScore,
+      });
+      logger.info({ ms: Date.now() - t0, type: 'recaptchaV3', action }, 'captcha solved');
+      captchaCounter.inc({ result: 'solved' });
+      return res.data;
+    } catch (err) {
+      captchaCounter.inc({ result: 'failed' });
+      throw new CaptchaError('solver-failed', errMsg(err));
+    }
+  }
+
+  /** reCAPTCHA v2 (checkbox). Se mantiene por compatibilidad futura. */
+  async solveRecaptchaV2(sitekey: string, pageurl: string): Promise<string> {
+    const t0 = Date.now();
+    try {
+      const res = await this.getSolver().recaptcha({
+        googlekey: sitekey,
+        pageurl,
       });
       logger.info({ ms: Date.now() - t0, type: 'recaptchaV2' }, 'captcha solved');
       captchaCounter.inc({ result: 'solved' });
@@ -56,28 +75,6 @@ class CaptchaSolver {
     }
   }
 
-  /**
-   * Resuelve hCaptcha. Devuelve el token h-captcha-response.
-   */
-  async solveHcaptcha(siteKey: string, pageUrl: string): Promise<string> {
-    const t0 = Date.now();
-    try {
-      const res = await this.getSolver().hcaptcha({
-        sitekey: siteKey,
-        pageurl: pageUrl,
-      });
-      logger.info({ ms: Date.now() - t0, type: 'hcaptcha' }, 'captcha solved');
-      captchaCounter.inc({ result: 'solved' });
-      return res.data;
-    } catch (err) {
-      captchaCounter.inc({ result: 'failed' });
-      throw new CaptchaError('solver-failed', errMsg(err));
-    }
-  }
-
-  /**
-   * Consulta balance de saldo. Si <0.5 USD aprox, /readyz puede degradar.
-   */
   async getBalance(): Promise<number | null> {
     try {
       const balance = await this.getSolver().balance();

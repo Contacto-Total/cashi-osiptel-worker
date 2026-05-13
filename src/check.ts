@@ -1,34 +1,24 @@
 /**
- * Orquestación del check Osiptel.
+ * Orquestación del check Osiptel (post-pivot: query por DNI).
  *
- * Flujo:
- *  1. Si el circuit breaker está abierto, retornar BANNED inmediatamente (sin gastar pool ni captcha).
- *  2. Adquirir un slot del browser pool.
- *  3. Crear una page nueva en el contexto.
- *  4. Delegar al portal-client (navegar + captcha + parsear).
- *  5. Cerrar page. Devolver al pool, reciclando si el resultado fue BANNED.
- *  6. Actualizar el circuit breaker.
- *  7. Aplicar timeout total per-check (config.playwright.perCheckBudgetMs).
- *
- * Privacidad:
- *  - No se loggea DNI ni nombre del titular.
- *  - phone se enmascara en logs.
+ *  1. Circuit breaker (BANNED consecutivos).
+ *  2. Acquire BrowserContext del pool.
+ *  3. Page.new -> portal-client.checkDocumentOnPortal(dni, dniType).
+ *  4. Release el contexto (recycling tras BANNED).
+ *  5. Aplicar timeout duro per-check.
  */
 import { browserPool } from './browser-pool.js';
-import { checkPhoneOnPortal } from './portal-client.js';
-import type { CheckRequest, CheckResponse } from './schema.js';
+import { checkDocumentOnPortal } from './portal-client.js';
+import type { CheckRequest, CheckResponse, OsiptelLine } from './schema.js';
 import { config } from './config.js';
-import { logger, maskPhone } from './logger.js';
+import { logger } from './logger.js';
 import { banGauge } from './metrics.js';
 
-// Circuit breaker simple
 class BanCircuitBreaker {
   private consecutiveBans = 0;
   private openUntil = 0;
 
-  isOpen(): boolean {
-    return Date.now() < this.openUntil;
-  }
+  isOpen(): boolean { return Date.now() < this.openUntil; }
 
   recordBan(): void {
     this.consecutiveBans++;
@@ -49,12 +39,6 @@ class BanCircuitBreaker {
     }
     this.openUntil = 0;
   }
-
-  reset(): void {
-    this.consecutiveBans = 0;
-    this.openUntil = 0;
-    banGauge.set(0);
-  }
 }
 
 const breaker = new BanCircuitBreaker();
@@ -63,7 +47,7 @@ export async function runCheck(req: CheckRequest): Promise<CheckResponse> {
   const t0 = Date.now();
 
   if (breaker.isOpen()) {
-    return resp(req, t0, 'BANNED', null, null, 0, 'circuit-breaker-open');
+    return resp(req, t0, 'BANNED', null, 0, 'circuit-breaker-open');
   }
 
   const slot = await browserPool.acquire();
@@ -73,48 +57,37 @@ export async function runCheck(req: CheckRequest): Promise<CheckResponse> {
   try {
     page = await slot.context.newPage();
 
-    // Timeout per-check duro
     const timeout = new Promise<never>((_, reject) =>
       setTimeout(() => reject(new Error('per-check-budget-exceeded')), config.playwright.perCheckBudgetMs)
     );
-    const work = checkPhoneOnPortal(page, req.phone, req.dni ?? null);
+    const work = checkDocumentOnPortal(page, req.dni, req.dniType);
 
     const outcome = await Promise.race([work, timeout]);
 
-    // Actualizar circuit breaker
     if (outcome.status === 'BANNED') {
       breaker.recordBan();
-      recycleOnRelease = true; // forzar nuevo contexto
+      recycleOnRelease = true;
     } else if (outcome.status === 'OK' || outcome.status === 'NOT_FOUND') {
       breaker.recordSuccess();
     }
-    // CAPTCHA_FAIL y ERROR: no afectan el breaker (no son señal de ban)
 
     logger.info(
       {
         requestId: req.requestId,
-        phone: maskPhone(req.phone),
+        dniType: req.dniType,
         status: outcome.status,
-        operator: outcome.operator,
+        linesCount: outcome.lines?.length ?? 0,
         latencyMs: Date.now() - t0,
         captchaAttempts: outcome.captchaAttempts,
       },
       'osiptel check done'
     );
 
-    return resp(
-      req,
-      t0,
-      outcome.status,
-      outcome.operator,
-      outcome.dniMatch,
-      outcome.captchaAttempts,
-      outcome.error
-    );
+    return resp(req, t0, outcome.status, outcome.lines, outcome.captchaAttempts, outcome.error);
   } catch (err) {
     const message = errMsg(err);
-    logger.warn({ requestId: req.requestId, phone: maskPhone(req.phone), err: message }, 'osiptel check failed');
-    return resp(req, t0, 'ERROR', null, null, 0, message);
+    logger.warn({ requestId: req.requestId, err: message }, 'osiptel check failed');
+    return resp(req, t0, 'ERROR', null, 0, message);
   } finally {
     if (page) {
       try { await page.close(); } catch { /* ignore */ }
@@ -127,17 +100,16 @@ function resp(
   req: CheckRequest,
   t0: number,
   status: CheckResponse['status'],
-  operator: CheckResponse['operator'],
-  dniMatch: boolean | null,
+  lines: OsiptelLine[] | null,
   captchaAttempts: number,
   error?: string | null
 ): CheckResponse {
   return {
     requestId: req.requestId,
-    phone: req.phone,
-    operator,
-    dniMatch,
+    dni: req.dni,
+    dniType: req.dniType,
     status,
+    lines,
     error: error ?? null,
     latencyMs: Date.now() - t0,
     captchaAttempts,

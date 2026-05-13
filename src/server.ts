@@ -11,7 +11,7 @@
  */
 import Fastify from 'fastify';
 import { config } from './config.js';
-import { logger, maskPhone } from './logger.js';
+import { logger } from './logger.js';
 import { CheckRequestSchema } from './schema.js';
 import { runCheck } from './check.js';
 import { registry, checkCounter, checkLatency } from './metrics.js';
@@ -92,11 +92,13 @@ app.post('/check', async (request, reply) => {
     end({ status: 'ERROR' });
     checkCounter.inc({ status: 'ERROR' });
     const message = err instanceof Error ? err.message : String(err);
-    logger.error({ requestId: req.requestId, phone: maskPhone(req.phone), err: message }, 'osiptel check crashed');
+    logger.error({ requestId: req.requestId, dniType: req.dniType, err: message }, 'osiptel check crashed');
     return reply.code(500).send({
       requestId: req.requestId,
-      phone: req.phone,
+      dni: req.dni,
+      dniType: req.dniType,
       status: 'ERROR',
+      lines: null,
       error: message,
       latencyMs: 0,
       captchaAttempts: 0,
