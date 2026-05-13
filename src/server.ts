@@ -60,7 +60,8 @@ app.get('/readyz', async (_req, reply) => {
   if (lastCheckOkAt && lastCheckOkAt > fiveMinAgo) {
     return { status: 'ready', lastCheckOkAt: new Date(lastCheckOkAt).toISOString() };
   }
-  reply.code(503).send({ status: 'not-ready', reason: 'no recent successful check' });
+  await reply.code(503).send({ status: 'not-ready', reason: 'no recent successful check' });
+  return;
 });
 
 app.get('/metrics', async (_req, reply) => {
