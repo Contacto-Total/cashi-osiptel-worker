@@ -37,7 +37,8 @@ app.addHook('preHandler', async (request, reply) => {
   }
   const headerToken = request.headers['x-worker-token'];
   if (headerToken !== config.workerToken) {
-    reply.code(401).send({ error: 'invalid-worker-token' });
+    await reply.code(401).send({ error: 'invalid-worker-token' });
+    return;
   }
 });
 

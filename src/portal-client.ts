@@ -22,7 +22,7 @@
  *  - HTML contiene heurística de "demasiados intentos".
  *  - Status HTTP 403/429 en alguna navegación.
  */
-import type { BrowserContext, Page } from 'playwright';
+import type { Page } from 'playwright';
 import { config } from './config.js';
 import { logger, maskPhone } from './logger.js';
 import { captchaSolver, CaptchaError } from './captcha-solver.js';
