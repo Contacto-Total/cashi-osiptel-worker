@@ -1,10 +1,12 @@
 # cashi-osiptel-worker
 
-Worker Node.js que valida titularidad telefónica contra el portal de Osiptel mediante Playwright + 2Captcha. Hace parte del sistema Cashi (Fase 1 standalone).
+Worker Node.js que consulta el portal `checatuslineas.osiptel.gob.pe` por DNI/CE/Pasaporte/RUC y devuelve la lista de líneas telefónicas asociadas, usando Playwright + 2Captcha.
+
+Es invocado por `web-service-cashi` (paquete `com.cashi.osiptel`) en el modelo NO-ortogonal V17+. Corre dentro de una VM con **VPN de salida peruana** porque las IPs de AWS están bloqueadas por Imperva/portal Osiptel. Ver `docs/VPN-SETUP.md`.
 
 ## Estado actual
 
-**Scaffold con stub.** La lógica de Playwright + parsing del portal + 2Captcha se implementa en el hito B5 del plan. El stub permite levantar el servidor, validar el contrato HTTP con el backend Java, y correr smoke tests.
+**Contrato estable.** El worker consulta por documento y devuelve líneas; el matching `phone → lines.phonePrefix` se hace en el cliente Java (`OsiptelClient.matchPhoneAgainstLines`). No es responsabilidad del worker decidir VALIDADO/NO_VALIDADO — eso depende del teléfono del cliente, que es contexto del backend.
 
 ## Quickstart (dev local)
 
