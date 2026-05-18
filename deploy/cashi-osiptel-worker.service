@@ -1,0 +1,38 @@
+[Unit]
+# Plantilla de unit systemd. Los placeholders __XXX__ los sustituye deploy/bootstrap.sh
+# y deja el resultado en /etc/systemd/system/cashi-osiptel-worker.service
+Description=Cashi Osiptel Worker - validacion titularidad telefonica
+Documentation=file://__REPO_DIR__/README.md
+After=network-online.target wg-quick@wsclient.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__WORKER_USER__
+WorkingDirectory=__REPO_DIR__
+
+# .env con WORKER_TOKEN, PORT, etc. (ver .env.example)
+EnvironmentFile=__REPO_DIR__/.env
+# Chromium compartido instalado por bootstrap.sh
+Environment=PLAYWRIGHT_BROWSERS_PATH=__BROWSERS_PATH__
+Environment=NODE_ENV=production
+
+ExecStart=__NODE_BIN__ __REPO_DIR__/dist/server.js
+
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cashi-osiptel-worker
+
+# Hardening basico. PrivateTmp=false a proposito: el worker escribe
+# diagnosticos en /tmp/osiptel-fail.{html,png} y conviene poder verlos.
+NoNewPrivileges=true
+PrivateTmp=false
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
