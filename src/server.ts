@@ -16,7 +16,6 @@ import { CheckRequestSchema } from './schema.js';
 import { runCheck } from './check.js';
 import { registry, checkCounter, checkLatency } from './metrics.js';
 import { browserPool } from './browser-pool.js';
-import { captchaSolver } from './captcha-solver.js';
 
 const app = Fastify({
   logger: false,  // usamos pino directo desde ./logger.ts
@@ -45,12 +44,10 @@ app.addHook('preHandler', async (request, reply) => {
 // ----- Routes -----
 
 app.get('/healthz', async () => {
-  const balance = config.twoCaptcha.apiKey ? await captchaSolver.getBalance() : null;
   return {
     status: 'ok',
     uptimeSec: Math.floor(process.uptime()),
-    twoCaptchaConfigured: Boolean(config.twoCaptcha.apiKey),
-    twoCaptchaBalanceUsd: balance,
+    captchaMode: 'native-grecaptcha-v3',
     poolSize: config.pool.size,
   };
 });

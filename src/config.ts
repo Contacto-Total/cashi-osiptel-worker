@@ -24,11 +24,6 @@ export const config = {
   workerToken: process.env.WORKER_TOKEN ?? '',
   logLevel: process.env.LOG_LEVEL ?? 'info',
 
-  twoCaptcha: {
-    apiKey: process.env.TWO_CAPTCHA_KEY ?? '',
-    timeoutSec: num(process.env.TWO_CAPTCHA_TIMEOUT_S, 90),
-  },
-
   playwright: {
     headless: bool(process.env.PLAYWRIGHT_HEADLESS, true),
     navTimeoutMs: num(process.env.PLAYWRIGHT_NAV_TIMEOUT_MS, 30000),

@@ -1,6 +1,8 @@
 # cashi-osiptel-worker
 
-Worker Node.js que consulta el portal `checatuslineas.osiptel.gob.pe` por DNI/CE/Pasaporte/RUC y devuelve la lista de líneas telefónicas asociadas, usando Playwright + 2Captcha.
+Worker Node.js que consulta el portal `checatuslineas.osiptel.gob.pe` por DNI/CE/Pasaporte/RUC y devuelve la lista de líneas telefónicas asociadas, usando Playwright.
+
+El portal usa **reCAPTCHA v3** (score por comportamiento, sin desafío visual). El worker genera el token con el `grecaptcha` nativo que el propio portal carga — ejecuta `grecaptcha.execute()` dentro del Chromium real de Playwright. **No requiere servicio de captcha externo ni API key** (no usa 2Captcha). El score lo asigna Google según cuán humano parezca el navegador.
 
 Es invocado por `web-service-cashi` (paquete `com.cashi.osiptel`) en el modelo NO-ortogonal V17+. Corre dentro de una VM con **VPN de salida peruana** porque las IPs de AWS están bloqueadas por Imperva/portal Osiptel. Ver `docs/VPN-SETUP.md`.
 
@@ -55,6 +57,8 @@ docker run --rm -p 8090:8090 --env-file .env cashi-osiptel-worker:0.1
 Ver `.env.example`. Las más importantes:
 
 - `WORKER_TOKEN`: shared secret con el backend Java.
-- `TWO_CAPTCHA_KEY`: API key de 2Captcha (cuando se implemente B5).
-- `PROXY_LIST`: lista CSV de proxies residenciales (recomendado en piloto).
+- `PROXY_LIST`: lista CSV de proxies residenciales (opcional; la VM usa VPN PE).
 - `BAN_THRESHOLD` / `BAN_COOLDOWN_MS`: circuit breaker ante detección de bot.
+
+> No hay variable de captcha: el token reCAPTCHA v3 se genera con el navegador
+> (ver `src/portal-client.ts:generateRecaptchaV3Token`).

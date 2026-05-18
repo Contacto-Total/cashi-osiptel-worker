@@ -24,7 +24,7 @@ export const checkLatency = new Histogram({
 
 export const captchaCounter = new Counter({
   name: 'osiptel_worker_captcha_total',
-  help: 'Outcomes de 2Captcha',
+  help: 'Outcomes de la generacion de token reCAPTCHA v3 nativo (solved|failed)',
   labelNames: ['result'] as const,
   registers: [registry],
 });

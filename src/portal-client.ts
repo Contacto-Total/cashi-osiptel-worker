@@ -18,7 +18,7 @@ import type { Page } from 'playwright';
 import { writeFile } from 'node:fs/promises';
 import { config } from './config.js';
 import { logger, maskPhone } from './logger.js';
-import { captchaSolver, CaptchaError } from './captcha-solver.js';
+import { captchaCounter } from './metrics.js';
 import type { DocumentType, OperatorCode, OsiptelLine } from './schema.js';
 
 // ============================
@@ -96,18 +96,18 @@ export async function checkDocumentOnPortal(
     await page.selectOption(SEL.docTypeSelect, { value: DOC_TYPE_VALUE[dniType] });
     await page.fill(SEL.docNumberInput, dni);
 
-    // 2. Resolver reCAPTCHA v3 con hasta 3 intentos
+    // 2. Generar token reCAPTCHA v3 con el navegador (sin servicio externo).
+    //    El propio Chromium ejecuta grecaptcha.execute(); el score lo asigna Google.
     let captchaInjected = false;
     for (let attempt = 1; attempt <= 3 && !captchaInjected; attempt++) {
       captchaAttempts = attempt;
       try {
-        await injectRecaptchaV3Token(page);
+        await generateRecaptchaV3Token(page);
         captchaInjected = true;
+        captchaCounter.inc({ result: 'solved' });
       } catch (err) {
-        if (err instanceof CaptchaError && err.detail === 'no-api-key') {
-          return { status: 'ERROR', lines: null, captchaAttempts, error: 'no-captcha-api-key' };
-        }
-        logger.warn({ attempt, err: errMsg(err) }, 'captcha attempt failed');
+        captchaCounter.inc({ result: 'failed' });
+        logger.warn({ attempt, err: errMsg(err) }, 'recaptcha token generation failed');
         if (attempt === 3) {
           return { status: 'CAPTCHA_FAIL', lines: null, captchaAttempts, error: errMsg(err) };
         }
@@ -156,8 +156,21 @@ export async function checkDocumentOnPortal(
 // Helpers
 // ============================
 
-async function injectRecaptchaV3Token(page: Page): Promise<void> {
-  // Leer sitekey y action desde hidden inputs / scripts de la pagina
+/**
+ * Genera el token reCAPTCHA v3 SIN servicio externo.
+ *
+ * reCAPTCHA v3 no es un desafio: es un score que Google asigna por
+ * comportamiento. El portal ya carga el script `recaptcha/api.js?render=<sitekey>`,
+ * asi que `grecaptcha` esta disponible en la pagina. Ejecutamos
+ * `grecaptcha.execute(sitekey, { action })` dentro del navegador real
+ * (Chromium de Playwright) y obtenemos un token nativo — gratis.
+ *
+ * El score depende de cuan "humano" parezca el navegador. Si Google asigna
+ * score bajo, el portal puede rechazar la busqueda aunque el token sea valido;
+ * en ese caso el siguiente paso (waitForFunction) caera en timeout/ERROR.
+ */
+async function generateRecaptchaV3Token(page: Page): Promise<void> {
+  // 1. Resolver sitekey + action desde hidden inputs / script de la pagina
   const meta = await page.evaluate(({ keyId, actionId }) => {
     const keyEl = document.getElementById(keyId) as HTMLInputElement | null;
     const actionEl = document.getElementById(actionId) as HTMLInputElement | null;
@@ -175,17 +188,39 @@ async function injectRecaptchaV3Token(page: Page): Promise<void> {
     }
 
     const action = actionEl?.value ?? 'submit';
-    const pageUrl = location.href;
-    return { sitekey, action, pageUrl };
+    return { sitekey, action };
   }, { keyId: SEL.captchaSitekeyHidden.slice(1), actionId: SEL.captchaActionHidden.slice(1) });
 
   if (!meta.sitekey) {
-    throw new CaptchaError('site-key-not-found');
+    throw new Error('site-key-not-found');
   }
 
-  const token = await captchaSolver.solveRecaptchaV3(meta.sitekey, meta.pageUrl, meta.action);
+  // 2. Ejecutar grecaptcha.execute() en el contexto de la pagina
+  const token = await page.evaluate(async ({ sitekey, action }) => {
+    return await new Promise<string>((resolve, reject) => {
+      const g = (window as unknown as { grecaptcha?: {
+        ready: (cb: () => void) => void;
+        execute: (key: string, opts: { action: string }) => Promise<string>;
+      } }).grecaptcha;
 
-  // Inyectar token en el hidden
+      if (!g || typeof g.ready !== 'function') {
+        reject(new Error('grecaptcha-not-loaded'));
+        return;
+      }
+      const timer = setTimeout(() => reject(new Error('grecaptcha-execute-timeout')), 20000);
+      g.ready(() => {
+        g.execute(sitekey, { action })
+          .then((t: string) => { clearTimeout(timer); resolve(t); })
+          .catch((e: unknown) => { clearTimeout(timer); reject(e instanceof Error ? e : new Error(String(e))); });
+      });
+    });
+  }, { sitekey: meta.sitekey, action: meta.action });
+
+  if (!token) {
+    throw new Error('empty-token');
+  }
+
+  // 3. Inyectar el token en el hidden que el form envia
   await page.evaluate(
     ({ selector, token }) => {
       const el = document.querySelector(selector) as HTMLInputElement | null;
