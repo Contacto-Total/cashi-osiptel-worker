@@ -8,7 +8,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
-    "dev": "tsx watch src/server.ts",
+    "dev": "node --env-file=.env --import tsx/esm --watch src/server.ts",
     "typecheck": "tsc --noEmit",
     "playwright:install": "playwright install --with-deps chromium"
   },
