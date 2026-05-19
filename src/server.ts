@@ -12,33 +12,14 @@
 import Fastify from 'fastify';
 import { config } from './config.js';
 import { logger } from './logger.js';
-import { CheckRequestSchema } from './schema.js';
-import { runCheck } from './check.js';
-import { registry, checkCounter, checkLatency } from './metrics.js';
+import { registry } from './metrics.js';
 import { browserPool } from './browser-pool.js';
+import { startPoller } from './poller.js';
+import { getLastOkAt } from './readiness.js';
 
 const app = Fastify({
   logger: false,  // usamos pino directo desde ./logger.ts
   bodyLimit: 1024 * 64,
-});
-
-// State para readiness
-let lastCheckOkAt: number | null = null;
-
-// ----- Auth middleware -----
-app.addHook('preHandler', async (request, reply) => {
-  const url = request.url ?? '';
-  const isPublic = url.startsWith('/healthz') || url.startsWith('/readyz') || url.startsWith('/metrics');
-  if (isPublic) return;
-
-  if (!config.workerToken) {
-    return; // dev mode sin token
-  }
-  const headerToken = request.headers['x-worker-token'];
-  if (headerToken !== config.workerToken) {
-    await reply.code(401).send({ error: 'invalid-worker-token' });
-    return;
-  }
 });
 
 // ----- Routes -----
@@ -53,9 +34,10 @@ app.get('/healthz', async () => {
 });
 
 app.get('/readyz', async (_req, reply) => {
+  const lastOkAt = getLastOkAt();
   const fiveMinAgo = Date.now() - 5 * 60 * 1000;
-  if (lastCheckOkAt && lastCheckOkAt > fiveMinAgo) {
-    return { status: 'ready', lastCheckOkAt: new Date(lastCheckOkAt).toISOString() };
+  if (lastOkAt && lastOkAt > fiveMinAgo) {
+    return { status: 'ready', lastCheckOkAt: new Date(lastOkAt).toISOString() };
   }
   await reply.code(503).send({ status: 'not-ready', reason: 'no recent successful check' });
   return;
@@ -67,49 +49,13 @@ app.get('/metrics', async (_req, reply) => {
     .send(await registry.metrics());
 });
 
-app.post('/check', async (request, reply) => {
-  const parsed = CheckRequestSchema.safeParse(request.body);
-  if (!parsed.success) {
-    return reply.code(400).send({
-      error: 'invalid-request',
-      details: parsed.error.flatten(),
-    });
-  }
-  const req = parsed.data;
-  const end = checkLatency.startTimer({ status: 'pending' });
-  try {
-    const result = await runCheck(req);
-    end({ status: result.status });
-    checkCounter.inc({ status: result.status });
-    if (result.status === 'OK' || result.status === 'NOT_FOUND') {
-      lastCheckOkAt = Date.now();
-    }
-    return result;
-  } catch (err: unknown) {
-    end({ status: 'ERROR' });
-    checkCounter.inc({ status: 'ERROR' });
-    const message = err instanceof Error ? err.message : String(err);
-    logger.error({ requestId: req.requestId, dniType: req.dniType, err: message }, 'osiptel check crashed');
-    return reply.code(500).send({
-      requestId: req.requestId,
-      dni: req.dni,
-      dniType: req.dniType,
-      status: 'ERROR',
-      lines: null,
-      error: message,
-      latencyMs: 0,
-      captchaAttempts: 0,
-      checkedAt: new Date().toISOString(),
-    });
-  }
-});
-
 // ----- Startup -----
 const start = async () => {
   try {
     await browserPool.start();
     await app.listen({ port: config.port, host: '0.0.0.0' });
     logger.info({ port: config.port }, 'cashi-osiptel-worker started');
+    startPoller();
   } catch (err) {
     logger.error({ err }, 'failed to start worker');
     process.exit(1);

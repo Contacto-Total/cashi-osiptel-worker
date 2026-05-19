@@ -43,6 +43,13 @@ export const config = {
   proxies: csv(process.env.PROXY_LIST),
 
   portalUrl: process.env.OSIPTEL_PORTAL_URL ?? 'https://checatuslineas.osiptel.gob.pe/',
+
+  backend: {
+    url: (process.env.BACKEND_URL ?? '').replace(/\/$/, ''),
+    token: process.env.BACKEND_TOKEN ?? '',
+    pollIntervalMs: num(process.env.POLL_INTERVAL_MS, 15000),
+    pollBatchSize: num(process.env.POLL_BATCH_SIZE, 3),
+  },
 };
 
 export type WorkerConfig = typeof config;
