@@ -51,9 +51,12 @@ Lo único obligatorio de cambiar:
 
 El resto tiene defaults válidos. **No hay variable de captcha** — el token reCAPTCHA v3 lo genera el navegador (gratis).
 
-## Paso 4 — VPN con IP peruana
+## Paso 4 — VPN con IP peruana (AdGuard VPN, gratis)
 
-El portal Osiptel bloquea IPs de AWS. Seguir **`docs/VPN-SETUP.md`** para montar Windscribe Lima con routing selectivo (solo el worker sale por VPN).
+El portal Osiptel bloquea IPs de AWS. Seguir **`docs/VPN-SETUP.md`**: AdGuard VPN
+free (3 GB/mes, incluye Perú) en modo SOCKS5; el worker apunta Playwright a ese
+proxy vía `PROXY_LIST=socks5://127.0.0.1:1080` en el `.env`. No toca el routing
+de la VM ni requiere cambios de código.
 
 Sin VPN, el worker arranca igual pero `/check` devolverá `BANNED` o `ERROR: form-not-found`.
 

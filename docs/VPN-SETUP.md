@@ -1,170 +1,145 @@
-# VPN Setup — IP saliente peruana para `cashi-osiptel-worker`
+# VPN Setup — IP peruana para `cashi-osiptel-worker` (AdGuard VPN, gratis)
 
-El portal `checatuslineas.osiptel.gob.pe` está protegido por Imperva/AWS WAF y **bloquea IPs de datacenters AWS** (HTTP 500 / página de bloqueo). El worker necesita salir por una IP peruana para poder hacer scraping.
+El portal `checatuslineas.osiptel.gob.pe` bloquea IPs de datacenters cloud (AWS).
+El worker necesita salir por una IP peruana.
 
-Este documento describe cómo montar **Windscribe (free tier, 10 GB/mes)** con servidor de salida Lima/Perú en la VM Ubuntu de QAS, configurando que **solo el proceso del worker** use la VPN, sin afectar el resto del tráfico (SSH, gateway, backend, etc.).
+**Solución gratuita**: AdGuard VPN tiene plan free (3 GB/mes) **con servidor en
+Perú** y un CLI Linux que corre en **modo SOCKS5**. El worker apunta Playwright a
+ese proxy SOCKS5 — solo el tráfico del worker sale por la VPN, el resto de la VM
+queda intacto (no toca routing ni DNS del sistema).
 
-> **Si tras el piloto Windscribe corta por límite de banda o el portal sigue bloqueando**, evaluar PrivadoVPN free (también ofrece Lima a veces) o Bright Data residential proxies (~$15/GB, IPs residenciales reales de hogares peruanos).
-
----
-
-## 1. Cuenta y config WireGuard
-
-1. Crear cuenta en https://windscribe.com (free, requiere email).
-2. Ir a https://windscribe.com/getconfig/wireguard
-3. Seleccionar **Location: Lima** (si no aparece, intentar "Peru" o el más cercano: "Bogotá" no sirve — necesita ser PE).
-4. **Generar config**. Descargar el archivo `.conf`. Ejemplo del contenido:
-
-```
-[Interface]
-PrivateKey = <key-privada-generada>
-Address = 10.64.x.x/16
-DNS = 10.255.255.1
-MTU = 1420
-
-[Peer]
-PublicKey = <pubkey-server>
-AllowedIPs = 0.0.0.0/0
-Endpoint = <ip-publica-lima>:443
-```
-
-5. Copiar a la VM como `/etc/wireguard/wsclient.conf` con permisos restrictivos:
-
-```bash
-sudo install -m 600 -o root -g root /tmp/wsclient.conf /etc/wireguard/wsclient.conf
-```
+> Por qué AdGuard y no Windscribe/Proton: ningún free tier "clásico" incluye Perú.
+> AdGuard free sí lo incluye. 3 GB/mes alcanza para ~4.000–10.000 validaciones
+> (cada una ~300–800 KB). Si se agota, AdGuard VPN Pro o evaluar proxy residencial.
 
 ---
 
-## 2. Instalación de WireGuard
+## 1. Crear cuenta AdGuard VPN (free)
+
+1. Ir a https://adguard-vpn.com — crear cuenta gratis (email).
+2. El plan free da 3 GB/mes y acceso a varias ubicaciones, **Perú incluido**.
+
+## 2. Instalar el CLI en la VM
 
 ```bash
-sudo apt update
-sudo apt install -y wireguard wireguard-tools iptables-persistent
+curl -fsSL https://raw.githubusercontent.com/AdguardTeam/AdGuardVPNCLI/master/scripts/release/install.sh | sh -s -- -v
 ```
 
----
+(Si el comando cambió, ver el repo oficial: https://github.com/AdguardTeam/AdGuardVPNCLI)
 
-## 3. Routing selectivo — solo el worker usa la VPN
+Verificar:
+```bash
+adguardvpn-cli --version
+```
 
-**Problema**: si levantamos la VPN normal con `wg-quick up wsclient`, TODO el tráfico de la VM sale por Windscribe — gateway, SSH desde nuestra IP, backend, etc. Eso rompe servicios y consume los 10 GB rapidísimo.
-
-**Solución**: usar `cgroup` + `iptables --uid-owner` para que solo el tráfico del usuario que corre el worker salga por la VPN.
-
-### Paso 3.1 — Crear usuario dedicado para el worker
+## 3. Login
 
 ```bash
-sudo useradd -r -m -d /var/lib/osiptel-worker -s /bin/bash osiptelworker
-sudo chown -R osiptelworker:osiptelworker /home/ubuntu/cashi/cashi-osiptel-worker
+adguardvpn-cli login
+```
+Pide el email y password de la cuenta AdGuard.
+
+## 4. Modo SOCKS5 + conectar a Perú
+
+```bash
+# Modo SOCKS (levanta un proxy local en vez de TUN del sistema)
+adguardvpn-cli set-mode SOCKS
+
+# Confirmar / fijar host y puerto (default 127.0.0.1:1080)
+adguardvpn-cli set-socks-host 127.0.0.1
+adguardvpn-cli set-socks-port 1080
+
+# Ver el nombre exacto de la ubicacion de Peru
+adguardvpn-cli list-locations | grep -i peru
+
+# Conectar (ajustar el nombre/codigo segun list-locations)
+adguardvpn-cli connect -l Peru
+
+# Estado
+adguardvpn-cli status
 ```
 
-(o si preferís dejar el repo en ubuntu, basta con cambiar el ExecStart del systemd unit a `User=osiptelworker` y darle permisos read).
+Tras `connect`, queda un proxy SOCKS5 escuchando en `127.0.0.1:1080`.
 
-### Paso 3.2 — Levantar WireGuard como interfaz sin tomar el default route
+## 5. Verificar que el proxy sale por Perú
 
-Editar `/etc/wireguard/wsclient.conf` y agregar `Table = off` en `[Interface]` y borrar/comentar `AllowedIPs = 0.0.0.0/0` para evitar que tome la default route:
+```bash
+curl -s --socks5 127.0.0.1:1080 https://ifconfig.me ; echo
+# Debe devolver una IP peruana
+
+curl -s --socks5 127.0.0.1:1080 https://ipinfo.io/country ; echo
+# Debe devolver: PE
+```
+
+## 6. Apuntar el worker al proxy
+
+Editar el `.env` del worker:
+```bash
+sudo sed -i 's|^PROXY_LIST=.*|PROXY_LIST=socks5://127.0.0.1:1080|' \
+  /home/ubuntu/cashi/cashi-osiptel-worker/.env
+sudo systemctl restart cashi-osiptel-worker
+```
+
+El worker (`browser-pool.ts`) ya lee `PROXY_LIST` y se lo pasa a Playwright —
+no requiere cambios de código. Cada contexto Chromium saldrá por el SOCKS5 de
+AdGuard, es decir, por Perú.
+
+## 7. Smoke test
+
+```bash
+cd /home/ubuntu/cashi/cashi-osiptel-worker
+WORKER_TOKEN=$(sudo grep -oP '(?<=^WORKER_TOKEN=).*' .env) \
+DNI=<un-dni-real> bash scripts/smoke.sh
+```
+
+`/check` debería devolver `OK` o `NOT_FOUND` (ya no `BANNED`/`form-not-found`).
+
+## 8. Que la VPN sobreviva reboots
+
+El `connect` de AdGuard VPN CLI mantiene la conexión vía su daemon, pero conviene
+asegurar la reconexión tras un reinicio de la VM. Unit systemd simple:
 
 ```ini
-[Interface]
-PrivateKey = ...
-Address = 10.64.x.x/16
-DNS = 10.255.255.1
-MTU = 1420
-Table = off                       # <-- NO tomar default route automaticamente
+# /etc/systemd/system/adguardvpn-peru.service
+[Unit]
+Description=AdGuard VPN - SOCKS5 salida Peru para osiptel-worker
+After=network-online.target
+Wants=network-online.target
+Before=cashi-osiptel-worker.service
 
-[Peer]
-PublicKey = ...
-AllowedIPs = 0.0.0.0/0            # se respeta solo via iptables/routing manual
-Endpoint = <ip>:443
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStart=/usr/local/bin/adguardvpn-cli connect -l Peru
+ExecStop=/usr/local/bin/adguardvpn-cli disconnect
+
+[Install]
+WantedBy=multi-user.target
 ```
-
-Levantar:
-```bash
-sudo wg-quick up wsclient
-```
-
-### Paso 3.3 — Routing por UID via `ip rule` + tabla custom
 
 ```bash
-# Crear tabla de routing dedicada
-echo "200 osiptelvpn" | sudo tee -a /etc/iproute2/rt_tables
-
-# Default route en esa tabla = la VPN
-sudo ip route add default dev wsclient table osiptelvpn
-
-# Regla: paquetes marcados con fwmark 0x200 usan la tabla osiptelvpn
-sudo ip rule add fwmark 0x200 table osiptelvpn
-
-# iptables: marcar tráfico del UID del usuario osiptelworker
-WORKER_UID=$(id -u osiptelworker)
-sudo iptables -t mangle -A OUTPUT -m owner --uid-owner $WORKER_UID -j MARK --set-mark 0x200
-
-# Persistir reglas iptables
-sudo netfilter-persistent save
+sudo systemctl daemon-reload
+sudo systemctl enable --now adguardvpn-peru
 ```
 
-### Paso 3.4 — Verificar
+(Verificar la ruta real del binario con `which adguardvpn-cli`.)
 
+## Monitoreo de cuota
+
+3 GB/mes. Ver consumo en https://adguard-vpn.com (panel de la cuenta) o:
 ```bash
-# Como el usuario del worker:
-sudo -u osiptelworker curl -s ifconfig.me
-# Debe dar: IP peruana (Windscribe Lima)
-
-# Como ubuntu (resto del trafico):
-curl -s ifconfig.me
-# Debe dar: IP publica AWS de la VM (sin cambio)
+adguardvpn-cli status
 ```
 
----
+Si se agota antes de fin de mes → el worker empezará a recibir `BANNED`/timeouts.
+Opciones: AdGuard VPN Pro (sin límite) o proxy residencial PE.
 
-## 4. Auto-start
+## Troubleshooting
 
-```bash
-sudo systemctl enable wg-quick@wsclient
-```
-
-Y si el worker corre via systemd, agregar `User=osiptelworker` al unit file para que herede el routing.
-
----
-
-## 5. Monitoreo de cuota Windscribe
-
-10 GB/mes. Cada validación Osiptel consume típicamente **300-800 KB** (página + reCAPTCHA + JS + imágenes). Estimado: 12-30 mil validaciones/mes posibles con el plan free. Suficiente para piloto.
-
-Endpoint útil: https://windscribe.com/myaccount muestra GB consumidos del mes.
-
-Si llegamos al 80% del límite antes de fin de mes → migrar a paid (~5 USD/mes) o evaluar Bright Data.
-
----
-
-## 6. Troubleshooting
-
-| Síntoma | Causa probable | Fix |
+| Síntoma | Causa | Fix |
 |---|---|---|
-| `curl ifconfig.me` desde el worker da IP AWS | Las reglas iptables no se aplicaron o el usuario es otro | Verificar `id` del proceso del worker (`ps -ef | grep node`) y comparar con `iptables -t mangle -L OUTPUT -n -v` |
-| Worker no puede salir a internet | `Table = off` removió la default route pero las reglas no enrutaron | Re-aplicar paso 3.3 |
-| Portal sigue devolviendo blocked page | La IP de Windscribe Lima está en blacklist de Imperva | Reconectar Windscribe (a veces da IP rotada), o probar otro servidor PE, o evaluar residential proxies |
-| Latencia >5s antes había <1s | Tráfico ahora sale por Lima | Esperado. Aumentar `cashi.osiptel.worker-timeout-ms` en `web-service-cashi/application.properties` si hace falta |
-
----
-
-## 7. Alternativa pagada — Bright Data residential PE
-
-Si Windscribe Lima resulta inviable (banlist, banda, etc.):
-
-- Sign up en https://brightdata.com
-- Producto: **Residential Proxies** → Country = Peru
-- Endpoint: `pe.proxy.brightdata.com:22225`
-- Auth con username/password + sticky session ID por validación
-- Costo: ~$15/GB. Para 10k validaciones/mes ≈ $50-100/mes
-- Integración: configurar Playwright con proxy:
-  ```ts
-  browser = await chromium.launch({
-    proxy: {
-      server: 'pe.proxy.brightdata.com:22225',
-      username: 'brd-customer-XXX-zone-residential-country-pe',
-      password: process.env.BRIGHTDATA_PASSWORD,
-    },
-  });
-  ```
-  Si vamos por esa vía, ya no hace falta la VPN del sistema operativo — el proxy va a nivel browser.
+| `/check` devuelve `form-not-found` | Worker no sale por el proxy | Verificar `PROXY_LIST` en `.env` y `adguardvpn-cli status` |
+| `curl --socks5` da IP de AWS | AdGuard no está conectado o no en modo SOCKS | `adguardvpn-cli set-mode SOCKS && adguardvpn-cli connect -l Peru` |
+| `/check` devuelve `BANNED` | IP de AdGuard PE en blacklist del portal, o score reCAPTCHA bajo | Reconectar (otra IP), o evaluar proxy residencial |
+| `CAPTCHA_FAIL` recurrente | Score reCAPTCHA v3 bajo | Ver mitigaciones en `deploy/INSTALL.md` (xvfb, stealth) |
+| Cuota 3 GB agotada | Mucho tráfico | AdGuard VPN Pro o proxy residencial |
