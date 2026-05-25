@@ -23,21 +23,21 @@ interface QueueItem {
 
 interface PollResult {
   id: number;
-  status: 'VALIDADO' | 'NO_VALIDADO' | 'ERROR';
+  status: 'PERTENECE' | 'NO_PERTENECE' | 'ERROR';
   operator: string | null;
 }
 
-function matchPhone(phone: string, lines: OsiptelLine[]): { status: 'VALIDADO' | 'NO_VALIDADO'; operator: string | null } {
+function matchPhone(phone: string, lines: OsiptelLine[]): { status: 'PERTENECE' | 'NO_PERTENECE'; operator: string | null } {
   const digits = phone.replace(/\D/g, '');
   const normalized = digits.length === 11 && digits.startsWith('51') ? digits.slice(2) : digits;
   if (normalized.length !== 9 || !normalized.startsWith('9')) {
-    return { status: 'NO_VALIDADO', operator: null };
+    return { status: 'NO_PERTENECE', operator: null };
   }
   const prefix5 = normalized.slice(0, 5);
   const match = lines.find(l => l.phonePrefix === prefix5);
   return match
-    ? { status: 'VALIDADO', operator: match.operator }
-    : { status: 'NO_VALIDADO', operator: null };
+    ? { status: 'PERTENECE', operator: match.operator }
+    : { status: 'NO_PERTENECE', operator: null };
 }
 
 async function fetchQueue(): Promise<QueueItem[]> {
@@ -84,13 +84,13 @@ async function processBatch(): Promise<void> {
       const matched = matchPhone(item.phone, outcome.lines);
       result = { id: item.id, ...matched };
     } else if (outcome.status === 'NOT_FOUND') {
-      result = { id: item.id, status: 'NO_VALIDADO', operator: null };
+      result = { id: item.id, status: 'NO_PERTENECE', operator: null };
     } else {
       result = { id: item.id, status: 'ERROR', operator: null };
     }
 
     await postResult(result);
-    if (result.status === 'VALIDADO' || result.status === 'NO_VALIDADO') markOk();
+    if (result.status === 'PERTENECE' || result.status === 'NO_PERTENECE') markOk();
     logger.info({ id: item.id, status: result.status, operator: result.operator }, 'poll: resultado enviado');
   }
 }
