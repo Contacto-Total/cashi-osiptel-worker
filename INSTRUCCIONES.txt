@@ -1,0 +1,37 @@
+cashi-osiptel-worker — Instrucciones de instalacion
+======================================================
+
+REQUISITOS
+----------
+- Windows 10/11
+- Node.js 20 LTS o superior (https://nodejs.org/en/download)
+- Conexion a internet con IP peruana (para acceder al portal Osiptel)
+  Si usas VPN o estas en el extranjero, el portal puede bloquear la consulta.
+
+INSTALACION (primera vez)
+--------------------------
+1. Descomprime el ZIP en cualquier carpeta
+2. Doble clic en setup.bat
+   - Instala las dependencias automaticamente
+   - Compila el proyecto
+   - Descarga Chromium (puede tardar 2-3 minutos)
+   - Crea el icono "Osiptel Worker" en tu escritorio
+   - Crea el archivo .env YA configurado para PRODUCCION:
+       BACKEND_URL=https://cobranza.contactototal.com.pe
+       BACKEND_TOKEN=(ya incluido)
+3. (OPCIONAL) Solo si te dieron un token distinto, abre .env con el
+   Bloc de notas y reemplaza la linea BACKEND_TOKEN=
+
+USO DIARIO
+----------
+- Doble clic en "Osiptel Worker" del escritorio
+- El worker arranca y empieza a validar telefonos automaticamente
+- No requiere ninguna interaccion adicional
+
+SOLUCION DE PROBLEMAS
+---------------------
+- "El worker ya esta corriendo": cierra la ventana negra que ya esta abierta
+- El worker se reinicia solo si se detiene inesperadamente
+- Si el portal Osiptel bloquea las consultas (ban), el worker espera
+  10 minutos automaticamente antes de reintentar
+- Para ver mas detalle en los logs: abre .env y cambia LOG_LEVEL=debug
